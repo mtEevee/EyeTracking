@@ -9,12 +9,12 @@ library(reshape2)
 ```
 
 ```{r}
-ROOT <- "/home/lisa/Projects/EyeTracking" #нужно заменить на путь где будет лежать скрипт и результаты выполнения
+ROOT <- "G:/Projects/EyeTracking" #нужно заменить на путь где будет лежать скрипт и результаты выполнения
 DATA_ROOT <- file.path(ROOT, "Data") #в подпапке Data лежат данные участников, и туда же нужно положить файл с метаданными (начало и конец чтения)
 metadata_path <- file.path(DATA_ROOT,
                            "Metadata.csv") #в файле Metadata.csv не должно быть пометок, только данные в столбцах. Количество строк в тексте - просто одна цифра, без скобок. Номер участника в каждой строке. NA можно оставить.
 filenames <- list.files(path = DATA_ROOT, pattern = "P|S\\d+.*_text.txt") #в папке DATA_ROOT ищутся все файлы, которые начинаются на Р или S, затем идет одна или больше цифр, затем что угодно, затем _text.txt
-rawdata_paths <- paste0(DATA_ROOT, "/", filenames)
+rawdata_paths <- file.path(DATA_ROOT, filenames)
 dir.create(file.path(ROOT, "preprocessed_data"), showWarnings = FALSE)
 ```
 
