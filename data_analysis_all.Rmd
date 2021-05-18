@@ -1,0 +1,276 @@
+---
+title: "Eye tracking data analysis"
+output: html_document
+---
+```{r}
+library(tidyverse)
+library(purrr)
+library(reshape2)
+```
+
+```{r}
+ROOT <- "/home/lisa/Projects/EyeTracking" #нужно заменить на путь где будет лежать скрипт и результаты выполнения
+DATA_ROOT <- file.path(ROOT, "Data") #в подпапке Data лежат данные участников, и туда же нужно положить файл с метаданными (начало и конец чтения)
+metadata_path <- file.path(DATA_ROOT,
+                           "Metadata.csv") #в файле Metadata.csv не должно быть пометок, только данные в столбцах. Количество строк в тексте - просто одна цифра, без скобок. Номер участника в каждой строке. NA можно оставить.
+filenames <- list.files(path = DATA_ROOT, pattern = "P|S\\d+.*_text.txt") #в папке DATA_ROOT ищутся все файлы, которые начинаются на Р или S, затем идет одна или больше цифр, затем что угодно, затем _text.txt
+rawdata_paths <- paste0(DATA_ROOT, "/", filenames)
+dir.create(file.path(ROOT, "preprocessed_data"), showWarnings = FALSE)
+```
+
+```{r function to read and format raw data}
+read_and_format <- function(path_to_raw_data){
+  output <- read.table(path_to_raw_data,
+                       sep = "\t",
+                       row.names = NULL,
+                       strip.white = TRUE,
+                       blank.lines.skip = TRUE,
+                       col.names = c("time","marker","coordinates","data_point_range","saccade_duration","saccade_value","datapoint_col","not_used"),
+                       stringsAsFactors = FALSE,
+                       fill = TRUE) %>% 
+    mutate(participant = str_extract(path_to_raw_data, "(P|S)\\d+.*(?=_text.txt)"), 
+           data_point_range = ifelse(grepl("DataPointRange", saccade_duration),
+                                     saccade_duration,
+                                     data_point_range),
+           saccade_duration = ifelse(grepl("DataPointRange", saccade_duration),
+                                     "",
+                                     saccade_duration),
+           data_point_range = ifelse(grepl("DataPoint", saccade_value),
+                                     saccade_value,
+                                     data_point_range),
+           saccade_value = as.numeric(ifelse(grepl("DataPoint", saccade_value),
+                                             NA,
+                                             saccade_value)),
+           data_point_range = ifelse(grepl("DataPoint", datapoint_col),
+                                     datapoint_col,
+                                     data_point_range),
+           datapoint_col = ifelse(grepl("DataPoint", datapoint_col),
+                                  "",
+                                  datapoint_col),
+           time = as.numeric(str_extract(time, "\\d+\\.\\d{4}")),
+           marker_type = case_when(
+             grepl("F ", marker) ~ "Fixation",
+             grepl("S ", marker) ~ "Saccade",
+             grepl(".bmp", marker, ignore.case = TRUE) ~ "Picture",
+             TRUE ~ ""),
+           marker_duration = as.numeric(str_extract(marker, "\\d+\\.\\d{4}")),
+           x_coordinate = as.numeric(str_extract(coordinates, "\\-?\\d+\\.\\d{2}(?=\\,)")),
+           y_coordinate = as.numeric(str_extract(coordinates, "(?<=\\, )\\-?\\d+\\.\\d{2}")),
+           x_coordinate_2 = ifelse(marker_type == "Saccade",
+                                   as.numeric(str_extract(coordinates, "(?<=\\-\\()\\-?\\d+\\.\\d{2}(?=\\,)")), #проверить отрицательные
+                                   NA),
+           y_coordinate_2 = ifelse(marker_type == "Saccade",
+                                   as.numeric(str_extract(coordinates, "(?<=\\, )\\-?\\d+\\.\\d{2}(?=\\))(?!\\)\\-\\()")),
+                                   NA),
+           saccade_type = case_when(
+             (x_coordinate_2 - x_coordinate) < -0.5 & y_coordinate_2 > y_coordinate ~ "Diagonal", #саккада считается диагональной, если вторая у-координата больше первой, а вторая х-координата меньше первой на более чем 0,5
+             x_coordinate_2 < x_coordinate ~ "Regressive",
+             x_coordinate_2 > x_coordinate ~ "Progressive",
+             TRUE ~ NA_character_
+           )) %>% 
+    select(participant,
+           time, 
+           marker, 
+           marker_type, 
+           marker_duration, 
+           saccade_value, 
+           saccade_type, 
+           x_coordinate, 
+           y_coordinate, 
+           x_coordinate_2, 
+           y_coordinate_2)
+  return(output)
+}
+```
+
+```{r function to identify texts}
+identify_texts <- function(participant_data, participant_meta){
+  all_texts <- participant_meta %>% 
+    drop_na %>% 
+    select(Text_number) %>% 
+    pull
+  output <- participant_data %>% 
+    mutate(is_text = FALSE,
+           text_number = NA_integer_)
+  for(text_number in all_texts){
+    text_start <- participant_meta$Reading_start[participant_meta$Text_number == text_number]
+    text_end <- participant_meta$Reading_end[participant_meta$Text_number == text_number]
+    for(i in 1:nrow(participant_data)){
+      if(output$time[i] >= text_start & output$time[i] <= text_end){
+        output$is_text[i] <- TRUE
+        output$text_number[i] <- text_number
+      }
+    }
+  }
+  return(output)
+}
+```
+
+```{r funcion to process data per text}
+process_text <- function(text_n, text_data, meta_data){
+  print(text_n)
+  data <- text_data %>% 
+    filter(text_number == text_n)
+  meta <- meta_data %>% 
+    filter(Text_number == text_n)
+  output <- data %>% 
+    mutate(toremove = FALSE)
+  for(i in 1:(nrow(output)-1)){
+    #удаление коротких фиксаций и саккад после них
+    if(!is.na(output$marker_type[i]) & output$marker_type[i] == "Fixation" & !is.na(output$marker_duration[i]) & output$marker_duration[i] < 0.08){
+      output$toremove[i] <- TRUE
+      if(!is.na(output$marker_type[i+1]) & output$marker_type[i+1] == "Saccade") {
+        output$toremove[i+1] <- TRUE
+      }
+    }
+    # удаление диагональных саккад
+    if(!is.na(output$marker_type[i]) & output$marker_type[i] == "Saccade" & !is.na(output$saccade_type[i]) & output$saccade_type[i] == "Diagonal"){
+      output$toremove[i] <- TRUE
+      #удаление фиксаций между двумя подряд идущими диагональными саккадами
+      if(!is.na(output$marker_type[i+2]) & output$marker_type[i+2] == "Saccade" & !is.na(output$saccade_type[i+2]) & output$saccade_type[i+2] == "Diagonal" &
+         !is.na(output$marker_type[i+1]) & output$marker_type[i+1] == "Fixation"){
+        output$toremove[i+1] <- TRUE
+      }
+    }
+    #удаление саккад величиной меньше 1.5
+    if(!is.na(output$marker_type[i]) & output$marker_type[i] == "Saccade" & !is.na(output$saccade_value[i]) & output$saccade_value[i] < 1.5) {
+      output$toremove[i] <- TRUE
+    }
+    #удаление прогрессивных саккад величиной больше 10
+    if(!is.na(output$marker_type[i]) & output$marker_type[i] == "Saccade" & !is.na(output$saccade_type[i]) & output$saccade_type[i] == "Progressive" & output$saccade_value[i] > 10){
+      output$toremove[i] <- TRUE
+    }
+    #удаление подряд идущих регрессивных саккад величиной больше 10
+    if(!is.na(output$marker_type[i]) & output$marker_type[i] == "Saccade" & !is.na(output$saccade_type[i]) & output$saccade_type[i] == "Regressive" & output$saccade_value[i] > 10){
+      k <- 2 #допущение, что события идут чрезе одно - саккада - фиксация - саккада
+      while(!is.na(output$marker_type[i+k]) & output$marker_type[i+k] != "Saccade") k <- k+2
+      if(!is.na(output$marker_type[i+k]) & output$marker_type[i+k] == "Saccade" & !is.na(output$saccade_type[i+k]) & output$saccade_type[i+k] == "Regressive" & !is.na(output$saccade_value[i+k]) & output$saccade_value[i+k] > 10){
+        output$toremove[i] <- TRUE
+        output$toremove[i+k] <- TRUE
+      }
+    }
+  }
+  max_diagonal_time <- output %>% 
+    filter(saccade_type == "Diagonal") %>% 
+    pull(time) %>% 
+    max
+  
+  output <- output %>% 
+    mutate(lastline = ifelse(text_number != 2 & time > max_diagonal_time,
+                             TRUE,
+                             FALSE)) #%>% 
+  #filter(toremove == FALSE) #здесь происходит очистка по саккадам и фиксациям
+  return(output)
+}
+```
+
+```{r function to process data per participant}
+process_participant_data <- function(participant){
+  print(participant)
+  data <- all_data %>% 
+    keep(function(x) sum(x$participant == participant) == nrow(x)) %>% 
+    as.data.frame()
+  meta <- all_meta %>% 
+    keep(function(x) sum(x$Participant == participant) == nrow(x)) %>% 
+    bind_rows %>% 
+    drop_na
+  data_per_text <- identify_texts(data, meta) 
+  all_texts <- meta$Text_number
+  output <- lapply(all_texts, process_text, text_data = data_per_text, meta_data = meta)
+  return(output)
+}
+```
+
+```{r function to prepare output}
+prepare_output <- function(text){
+  clean_text <- text %>% filter(toremove == FALSE) #здесь происходит очистка по саккадам и фиксациям
+  participant_number <- unique(clean_text$participant)
+  text_number <- as.numeric(unique(clean_text$text_number))
+  meta <- bind_rows(all_meta) %>% 
+    filter(Participant_number == participant_number & Text_number == text_number)
+  
+  total_fixations_full_rows <- clean_text %>% 
+    filter(lastline == FALSE) %>% 
+    filter(marker_type == "Fixation") %>% 
+    count %>% 
+    pull
+  fixations_per_row <- total_fixations_full_rows/meta$Full_lines
+  
+  total_time <- clean_text$time[nrow(clean_text)] - clean_text$time[1]
+  words_per_sec <- meta$Total_words/total_time
+  total_fixations <- clean_text %>% 
+    filter(marker_type == "Fixation") %>% 
+    count %>% 
+    pull  
+  fixations_per_word <- total_fixations/meta$Total_words
+  fixation_duration_avg <- clean_text %>% 
+    filter(marker_type == "Fixation") %>% 
+    summarise(mean = mean(marker_duration)) %>% 
+    pull
+  regressive_saccades_percentage <- clean_text %>% 
+    filter(marker_type == "Saccade") %>% 
+    group_by(saccade_type) %>%
+    summarise(n = n()) %>%
+    mutate(freq = n / sum(n)) %>% 
+    filter(saccade_type == "Regressive") %>% 
+    select(freq) %>% 
+    pull 
+  progressive_saccade_value_avg <- clean_text %>% 
+    filter(marker_type == "Saccade" & saccade_type == "Progressive") %>% 
+    summarise(mean = mean(saccade_value)) %>% 
+    pull
+  progressive_saccade_value_variance <- clean_text %>% 
+    filter(marker_type == "Saccade" & saccade_type == "Progressive") %>% 
+    summarise(variance = sd(saccade_value)/mean(saccade_value)) %>% 
+    pull
+  output <- data.frame(participant_number,
+                       text_number,
+                       total_time,
+                       words_per_sec,
+                       total_fixations,
+                       fixations_per_word,
+                       fixations_per_row,
+                       fixation_duration_avg = fixation_duration_avg*1000,
+                       regressive_saccades_percentage = regressive_saccades_percentage*100,
+                       progressive_saccade_value_avg,
+                       progressive_saccade_value_variance)
+  return(output)
+}
+```
+
+```{r processing}
+all_meta <- read.csv(metadata_path) %>% 
+  split(.$Participant)
+
+all_data <- lapply(rawdata_paths, read_and_format) 
+
+all_participants <- sapply(all_meta, function(x) unique(x$Participant, na.rm=TRUE))
+
+selected_participants <- all_participants[!all_participants %in% c("P14", "P17", "P30a", "P30b1", "P30b2")]
+
+inter_result <- lapply(selected_participants, process_participant_data) %>% 
+  unlist(., recursive = FALSE) 
+
+lapply(inter_result, function(x) write.csv(x, 
+                                           file.path(ROOT, 
+                                                     "preprocessed_data", 
+                                                     paste0(x$participant[1], "_", x$text_number[1], ".csv")),
+                                           row.names = FALSE))
+output_data <- inter_result %>% 
+  map(prepare_output) %>% 
+  bind_rows() %>% 
+  mutate_if(is.numeric, function(x) round(x, digits = 4))
+
+write.csv(output_data, file.path(ROOT, "result.csv"), row.names = FALSE)
+```
+
+```{r playing with plots, eval=FALSE}
+plot(text$time, text$x_coordinate)
+plot(text$time, text$y_coordinate)
+max(text$x_coordinate)
+max(text$y_coordinate)
+min(text$x_coordinate)
+min(text$y_coordinate)
+plot(clean_text$x_coordinate, 1-clean_text$y_coordinate, type = "b")
+```
+
