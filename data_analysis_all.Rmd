@@ -9,7 +9,7 @@ library(reshape2)
 ```
 
 ```{r}
-ROOT <- "G:/Projects/EyeTracking" #нужно заменить на путь где будет лежать скрипт и результаты выполнения
+ROOT <- "G:/repos/EyeTracking" #нужно заменить на путь где будет лежать скрипт и результаты выполнения
 DATA_ROOT <- file.path(ROOT, "Data") #в подпапке Data лежат данные участников, и туда же нужно положить файл с метаданными (начало и конец чтения)
 metadata_path <- file.path(DATA_ROOT,
                            "Metadata.csv") #в файле Metadata.csv не должно быть пометок, только данные в столбцах. Количество строк в тексте - просто одна цифра, без скобок. Номер участника в каждой строке. NA можно оставить.
@@ -142,11 +142,13 @@ process_text <- function(text_n, text_data, meta_data){
     }
     #удаление подряд идущих регрессивных саккад величиной больше 10
     if(!is.na(output$marker_type[i]) & output$marker_type[i] == "Saccade" & !is.na(output$saccade_type[i]) & output$saccade_type[i] == "Regressive" & output$saccade_value[i] > 10){
+      #
       k <- 2 #допущение, что события идут чрезе одно - саккада - фиксация - саккада
-      while(!is.na(output$marker_type[i+k]) & output$marker_type[i+k] != "Saccade") k <- k+2
+      while(!is.na(output$marker_type[i+k]) & output$marker_type[i+k] != "Saccade") 
       if(!is.na(output$marker_type[i+k]) & output$marker_type[i+k] == "Saccade" & !is.na(output$saccade_type[i+k]) & output$saccade_type[i+k] == "Regressive" & !is.na(output$saccade_value[i+k]) & output$saccade_value[i+k] > 10){
         output$toremove[i] <- TRUE
         output$toremove[i+k] <- TRUE
+        k <- k+2
       }
     }
   }
@@ -246,7 +248,13 @@ all_data <- lapply(rawdata_paths, read_and_format)
 
 all_participants <- sapply(all_meta, function(x) unique(x$Participant, na.rm=TRUE))
 
-selected_participants <- all_participants[!all_participants %in% c("P14", "P17", "P30a", "P30b1", "P30b2")]
+present_data <- as.factor(sapply(rawdata_paths, function(x) str_extract(x, pattern = "(P|S)\\d+.*(?=_text.txt)")))
+present_metadata <- all_participants
+intersect(present_data, present_metadata)
+missing_data <- setdiff(present_metadata, present_data)
+missing_metadata <- setdiff(present_data, present_metadata)
+
+selected_participants <- all_participants[!all_participants %in% c("P16", "P17", "P19", missing_data)]
 
 inter_result <- lapply(selected_participants, process_participant_data) %>% 
   unlist(., recursive = FALSE) 
