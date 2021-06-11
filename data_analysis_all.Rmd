@@ -9,13 +9,19 @@ library(reshape2)
 ```
 
 ```{r}
-ROOT <- "G:/repos/EyeTracking" #нужно заменить на путь где будет лежать скрипт и результаты выполнения
+#нужно заменить на путь где будет лежать скрипт и результаты выполнения:
+
+#Windows:
+#ROOT <- "G:/repos/EyeTracking" 
+#Linux:
+ROOT <- "/home/lisa/repos/EyeTracking"
 DATA_ROOT <- file.path(ROOT, "Data") #в подпапке Data лежат данные участников, и туда же нужно положить файл с метаданными (начало и конец чтения)
 metadata_path <- file.path(DATA_ROOT,
                            "Metadata.csv") #в файле Metadata.csv не должно быть пометок, только данные в столбцах. Количество строк в тексте - просто одна цифра, без скобок. Номер участника в каждой строке. NA можно оставить.
 filenames <- list.files(path = DATA_ROOT, pattern = "P|S\\d+.*_text.txt") #в папке DATA_ROOT ищутся все файлы, которые начинаются на Р или S, затем идет одна или больше цифр, затем что угодно, затем _text.txt
 rawdata_paths <- file.path(DATA_ROOT, filenames)
 dir.create(file.path(ROOT, "preprocessed_data"), showWarnings = FALSE)
+dir.create(file.path(ROOT, "plots"), showWarnings = FALSE)
 ```
 
 ```{r function to read and format raw data}
@@ -254,7 +260,8 @@ intersect(present_data, present_metadata)
 missing_data <- setdiff(present_metadata, present_data)
 missing_metadata <- setdiff(present_data, present_metadata)
 
-selected_participants <- all_participants[!all_participants %in% c("P16", "P17", "P19", missing_data)]
+# selected_participants <- all_participants[!all_participants %in% c("P16", "P17", "P19", missing_data)]
+selected_participants <- all_participants[!all_participants %in%  missing_data]
 
 inter_result <- lapply(selected_participants, process_participant_data) %>% 
   unlist(., recursive = FALSE) 
@@ -264,6 +271,10 @@ lapply(inter_result, function(x) write.csv(x,
                                                      "preprocessed_data", 
                                                      paste0(x$participant[1], "_", x$text_number[1], ".csv")),
                                            row.names = FALSE))
+```
+#expert check
+```{r statistics}
+#add reading of preprocessed files after expert check (create new folder)
 output_data <- inter_result %>% 
   map(prepare_output) %>% 
   bind_rows() %>% 
@@ -272,13 +283,35 @@ output_data <- inter_result %>%
 write.csv(output_data, file.path(ROOT, "result.csv"), row.names = FALSE)
 ```
 
-```{r playing with plots, eval=FALSE}
-plot(text$time, text$x_coordinate)
-plot(text$time, text$y_coordinate)
-max(text$x_coordinate)
-max(text$y_coordinate)
-min(text$x_coordinate)
-min(text$y_coordinate)
-plot(clean_text$x_coordinate, 1-clean_text$y_coordinate, type = "b")
+```{r visualisation}
+#source data for visualisation is taken from preprocessed data folder, not after expert check
+visualise_clean <- function(inter_result_item){
+  participant <- unique(inter_result_item$participant)
+  text <- unique(inter_result_item$text_number)
+  clean_text <- inter_result_item %>% 
+    filter(toremove == FALSE) %>% 
+    select(x_coordinate, 
+           y_coordinate)
+  plot_path <- file.path(ROOT, 
+                         "plots", 
+                         paste0(participant, "_", text, ".jpeg"))
+  # plot(clean_text$x_coordinate, 
+  #      1-clean_text$y_coordinate,
+  #      type = "b",
+  #      main = paste0("Participant ", participant, ", text ", text),
+  #      xlab = "X",
+  #      ylab = "Y")
+  ggplot(data = clean_text,
+         aes(x = x_coordinate, 
+              y = 1-y_coordinate)) +
+    geom_point() +
+    geom_path() +
+    ggtitle(paste0("Participant ", participant, ", text ", text)) +
+    xlab("X") +
+    ylab("Y") + #add 1-y for y axis to reflect actual coordinates
+    theme_bw()
+  ggsave(plot_path)
+}
+lapply(inter_result, visualise_clean)
 ```
 
