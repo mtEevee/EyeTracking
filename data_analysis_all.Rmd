@@ -182,7 +182,7 @@ process_text <- function(text_n, text_data, meta_data){
            toremove = ifelse(firstline == FALSE & (y_coordinate < 0 | y_coordinate_2 < 0), #если в любом событии кроме событий первой строки любая из y-координат отрицательная, то это событие удаляется
                              TRUE,
                              toremove))
-    
+  
   return(output)
 }
 ```
@@ -271,7 +271,7 @@ visualise_clean <- function(inter_result_item){
            y_coordinate)
   plot_path <- file.path(ROOT, 
                          "plots", 
-                         paste0(participant, "_", text, ".jpeg"))
+                         paste0(participant, "_", text, ".png"))
   
   ggplot(data = clean_text,
          aes(x = x_coordinate, 
@@ -285,8 +285,10 @@ visualise_clean <- function(inter_result_item){
     scale_y_reverse(limits = c(1.4, -0.4), 
                     breaks = seq(1.4, -0.4, -0.2), 
                     labels = function(x) sprintf("%.1f", x)) +
-    theme_bw()
-  ggsave(plot_path)
+    theme_bw() +
+    theme(panel.background = element_rect(fill = "transparent"), 
+          plot.background = element_rect(fill = "transparent", color = NA))
+  ggsave(plot_path, bg = "transparent")
 }
 ```
 
