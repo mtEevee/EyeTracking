@@ -122,6 +122,7 @@ process_text <- function(text_n, text_data, meta_data){
     filter(Text_number == text_n)
   output <- data %>% 
     mutate(toremove = FALSE)
+  
   for(i in 1:(nrow(output)-1)){
     #удаление коротких фиксаций и саккад после них
     if(!is.na(output$marker_type[i]) & output$marker_type[i] == "Fixation" & !is.na(output$marker_duration[i]) & output$marker_duration[i] < 0.08){
@@ -149,14 +150,16 @@ process_text <- function(text_n, text_data, meta_data){
     }
     #удаление подряд идущих регрессивных саккад величиной больше 10
     if(!is.na(output$marker_type[i]) & output$marker_type[i] == "Saccade" & !is.na(output$saccade_type[i]) & output$saccade_type[i] == "Regressive" & output$saccade_value[i] > 10){
-      #
-      k <- 2 #допущение, что события идут чрезе одно - саккада - фиксация - саккада
-      while(!is.na(output$marker_type[i+k]) & output$marker_type[i+k] != "Saccade") 
-        if(!is.na(output$marker_type[i+k]) & output$marker_type[i+k] == "Saccade" & !is.na(output$saccade_type[i+k]) & output$saccade_type[i+k] == "Regressive" & !is.na(output$saccade_value[i+k]) & output$saccade_value[i+k] > 10){
+      k <- 2 #допущение, что события идут через одно - саккада - фиксация - саккада
+      if(!is.na(output$marker_type[i+k]) & output$marker_type[i+k] == "Saccade" & !is.na(output$saccade_type[i+k]) & output$saccade_type[i+k] == "Regressive" & !is.na(output$saccade_value[i+k]) & output$saccade_value[i+k] > 10){
+        output$saccade_type[i] <- "Diagonal" #для корректного выявления строк
+        while(!is.na(output$marker_type[i+k]) & output$marker_type[i+k] == "Saccade" & !is.na(output$saccade_type[i+k]) & output$saccade_type[i+k] == "Regressive") {
           output$toremove[i] <- TRUE
+          output$toremove[i+k-1] <- TRUE #удаление фиксаций между двумя саккадами
           output$toremove[i+k] <- TRUE
           k <- k+2
         }
+      }
     }
   }
   max_diagonal_time <- output %>% 
@@ -164,10 +167,22 @@ process_text <- function(text_n, text_data, meta_data){
     pull(time) %>% 
     max
   
+  min_diagonal_time <- output %>% 
+    filter(saccade_type == "Diagonal") %>% 
+    pull(time) %>% 
+    min
+  
   output <- output %>% 
     mutate(lastline = ifelse(text_number != 2 & time > max_diagonal_time,
                              TRUE,
-                             FALSE)) 
+                             FALSE),
+           firstline = ifelse(time < min_diagonal_time,
+                              TRUE,
+                              FALSE),
+           toremove = ifelse(firstline == FALSE & (y_coordinate < 0 | y_coordinate_2 < 0), #если в любом событии кроме событий первой строки любая из y-координат отрицательная, то это событие удаляется
+                             TRUE,
+                             toremove))
+    
   return(output)
 }
 ```
@@ -257,20 +272,20 @@ visualise_clean <- function(inter_result_item){
   plot_path <- file.path(ROOT, 
                          "plots", 
                          paste0(participant, "_", text, ".jpeg"))
-
-ggplot(data = clean_text,
-       aes(x = x_coordinate, 
-           y = y_coordinate)) +
-  geom_point() +
-  geom_path() +
-  ggtitle(paste0("Participant ", participant, ", text ", text)) +
-  xlab("X") +
-  ylab("Y") + 
-  scale_x_continuous(limits  = c(-0.4, 1.4), breaks = seq(-0.4, 1.4, 0.2)) +
-  scale_y_reverse(limits = c(1.4, -0.4), 
-                  breaks = seq(1.4, -0.4, -0.2), 
-                  labels = function(x) sprintf("%.1f", x)) +
-  theme_bw()
+  
+  ggplot(data = clean_text,
+         aes(x = x_coordinate, 
+             y = y_coordinate)) +
+    geom_point() +
+    geom_path() +
+    ggtitle(paste0("Participant ", participant, ", text ", text)) +
+    xlab("X") +
+    ylab("Y") + 
+    scale_x_continuous(limits  = c(-0.4, 1.4), breaks = seq(-0.4, 1.4, 0.2)) +
+    scale_y_reverse(limits = c(1.4, -0.4), 
+                    breaks = seq(1.4, -0.4, -0.2), 
+                    labels = function(x) sprintf("%.1f", x)) +
+    theme_bw()
   ggsave(plot_path)
 }
 ```
@@ -289,8 +304,8 @@ intersect(present_data, present_metadata)
 missing_data <- setdiff(present_metadata, present_data)
 missing_metadata <- setdiff(present_data, present_metadata)
 
-# selected_participants <- all_participants[!all_participants %in% c("P16", "P17", "P19", missing_data)]
-selected_participants <- all_participants[!all_participants %in%  missing_data]
+selected_participants <- all_participants[!all_participants %in% c("S42", missing_data)]
+#selected_participants <- all_participants[!all_participants %in%  missing_data]
 
 inter_result <- lapply(selected_participants, process_participant_data) %>% 
   unlist(., recursive = FALSE) 
